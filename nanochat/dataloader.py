@@ -64,7 +64,7 @@ def tokenizing_distributed_data_loader_with_state(B, T, split, tokenizer_threads
         # Accumulate enough tokens for one iteration before yielding.
         while len(token_buffer) < needed_tokens:
             doc_batch, (pq_idx, rg_idx) = next(batches)
-            token_lists = tokenizer.encode(doc_batch, prepend=bos_token, num_threads=tokenizer_threads)
+            token_lists = tokenizer.encode(doc_batch, prepend=bos_token)#, num_threads=tokenizer_threads)
             for tokens in token_lists:
                 token_buffer.extend(tokens)
         # Move tokens from the deque into the scratch buffer

@@ -41,6 +41,17 @@ class HuggingFaceTokenizer:
 
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
+        self._ensure_special_tokens()
+        self.bos_token_id = self.encode_special("<|bos|>")
+
+    def _ensure_special_tokens(self):
+        """Ensure all SPECIAL_TOKENS exist; add or fail early otherwise."""
+        missing = [token for token in SPECIAL_TOKENS if self.tokenizer.token_to_id(token) is None]
+        if missing:
+            self.tokenizer.add_special_tokens(missing)
+        remaining = [token for token in SPECIAL_TOKENS if self.tokenizer.token_to_id(token) is None]
+        if remaining:
+            raise ValueError(f"Failed to register special tokens: {remaining}")
 
     @classmethod
     def from_pretrained(cls, hf_path):
@@ -119,7 +130,10 @@ class HuggingFaceTokenizer:
 
     def encode_special(self, text):
         # encode a single special token via exact match
-        return self.tokenizer.token_to_id(text)
+        token_id = self.tokenizer.token_to_id(text)
+        if token_id is None:
+            raise ValueError(f"Special token {text!r} is not registered with the tokenizer")
+        return token_id
 
     def get_bos_token_id(self):
         bos = self.encode_special("<|bos|>")
@@ -379,12 +393,21 @@ class RustBPETokenizer:
 # -----------------------------------------------------------------------------
 # nanochat-specific convenience functions
 
-def get_tokenizer():
+def get_tokenizer(tok_type='hf'):
     from nanochat.common import get_base_dir
     base_dir = get_base_dir()
     tokenizer_dir = os.path.join(base_dir, "tokenizer")
-    # return HuggingFaceTokenizer.from_directory(tokenizer_dir)
-    return RustBPETokenizer.from_directory(tokenizer_dir)
+    #return HuggingFaceTokenizer.from_directory(tokenizer_dir)
+    #return RustBPETokenizer.from_directory(tokenizer_dir)
+    tokenizer_name = "gpt2"
+    if tok_type=='hf':
+        tok = HuggingFaceTokenizer.from_directory(os.path.join(get_base_dir(), "tokenizer_gpt2"))
+    elif tok_type=='rustbpe':
+        tok = RustBPETokenizer.from_directory(os.path.join(get_base_dir(), "tokenizer"))
+    else:
+        raise ValueError(f"Invalid tokenizer type: {tok_type}")
+    #tok.save(os.path.join(get_base_dir(), "tokenizer_gpt2"))
+    return tok
 
 def get_token_bytes(device="cpu"):
     import torch
