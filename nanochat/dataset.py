@@ -33,6 +33,21 @@ def list_parquet_files(data_dir=None, warn_on_legacy=False):
     """ Looks into a data dir and returns full paths to all parquet files. """
     data_dir = DATA_DIR if data_dir is None else data_dir
 
+    # Hebrew-only short-circuit: if the user opted into the mix but the English
+    # ClimbMix directory doesn't exist on disk, just use the Hebrew parquets.
+    # This lets heb_speedrun.sh run without ever downloading English shards.
+    if os.environ.get("NANOCHAT_MIX_HEB", "0") == "1" and not os.path.exists(data_dir):
+        from nanochat import heb_dataset
+        he_paths = heb_dataset.list_parquet_files()
+        if len(he_paths) == 0:
+            raise FileNotFoundError(
+                f"NANOCHAT_MIX_HEB=1 but neither English ({data_dir}) nor Hebrew "
+                f"({heb_dataset.DATA_DIR}) parquet directories contain data. "
+                f"Run `python -m nanochat.heb_dataset -n N` first."
+            )
+        print(f"NANOCHAT_MIX_HEB=1: no English shards at {data_dir}, using Hebrew-only ({len(he_paths)} shards).")
+        return he_paths
+
     # Legacy-supporting code due to the upgrade from FinewebEdu-100B to ClimbMix-400B
     # This code will eventually be deleted.
     if not os.path.exists(data_dir):
@@ -62,6 +77,30 @@ def list_parquet_files(data_dir=None, warn_on_legacy=False):
         if f.endswith('.parquet') and not f.endswith('.tmp')
     ])
     parquet_paths = [os.path.join(data_dir, f) for f in parquet_files]
+
+    # Optional 50/50 mix with the Hebrew HeDC4 shards. When the env var
+    # NANOCHAT_MIX_HEB=1 is set, we interleave the English parquet list
+    # with the Hebrew parquet list, so the dataloader sees one EN shard,
+    # then one HE shard, and so on. The last path in the returned list is
+    # still treated as the val shard by downstream iterators.
+    if os.environ.get("NANOCHAT_MIX_HEB", "0") == "1":
+        from nanochat import heb_dataset
+        he_paths = heb_dataset.list_parquet_files()
+        if len(he_paths) == 0:
+            print("WARNING: NANOCHAT_MIX_HEB=1 but no HeDC4 parquet files found; run `python -m nanochat.heb_dataset -n N` first.")
+        else:
+            # Split into train/val for each side, interleave train, then append a HE val shard.
+            en_train, en_val = parquet_paths[:-1], parquet_paths[-1:]
+            he_train, he_val = he_paths[:-1], he_paths[-1:]
+            mixed_train = []
+            n = max(len(en_train), len(he_train))
+            for i in range(n):
+                if i < len(en_train):
+                    mixed_train.append(en_train[i])
+                if i < len(he_train):
+                    mixed_train.append(he_train[i])
+            parquet_paths = mixed_train + he_val
+
     return parquet_paths
 
 def parquets_iter_batched(split, start=0, step=1):
@@ -78,7 +117,9 @@ def parquets_iter_batched(split, start=0, step=1):
         for rg_idx in range(start, pf.num_row_groups, step):
             rg = pf.read_row_group(rg_idx)
             texts = rg.column('text').to_pylist()
-            yield texts
+            texts = [t for t in texts if t]  # drop None / empty (HeDC4 has nulls)
+            if texts:
+                yield texts
 
 # -----------------------------------------------------------------------------
 def download_single_file(index):

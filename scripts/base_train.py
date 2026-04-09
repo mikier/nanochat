@@ -243,7 +243,10 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
-model = torch.compile(model, dynamic=False) # the inputs to model will never change shape so dynamic=False is safe
+if device_type == "cuda":
+    model = torch.compile(model, dynamic=False) # the inputs to model will never change shape so dynamic=False is safe
+else:
+    print0(f"Skipping torch.compile on device_type={device_type} (only enabled for cuda)")
 
 # -----------------------------------------------------------------------------
 # Scaling laws and muP extrapolations to determine the optimal training horizon, batch size, learning rates, weight decay.
@@ -465,12 +468,27 @@ while True:
             "My favorite color is",
             "If 5*x + 3 = 13, then x is",
         ]
+        # Hebrew parallels (printed after the English ones, right-to-left).
+        heb_prompts = [
+            "בירת צרפת היא",                       # The capital of France is
+            "הסמל הכימי של הזהב הוא",              # The chemical symbol of gold is
+            "ההפך מחם הוא",                         # The opposite of hot is
+            "הצבע האהוב עלי הוא",                   # My favorite color is
+            "כוכבי הלכת של מערכת השמש הם:",        # The planets of the solar system are:
+        ]
         engine = Engine(orig_model, tokenizer) # use orig_model to avoid recompilation
         for prompt in prompts:
             tokens = tokenizer(prompt, prepend="<|bos|>")
             with disable_fp8(orig_model):
                 sample, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=16, temperature=0)
             print0(tokenizer.decode(sample[0]))
+        for prompt in heb_prompts:
+            tokens = tokenizer(prompt, prepend="<|bos|>")
+            with disable_fp8(orig_model):
+                sample, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=16, temperature=0)
+            sample_str = tokenizer.decode(sample[0])
+            # Wrap in RLE..PDF and right-align so BiDi terminals render RTL.
+            print0("\u202B" + sample_str.rjust(80) + "\u202C")
         model.train()
 
     # save checkpoint: at the end of the run, or every save_every steps, except at the first step or the resume step

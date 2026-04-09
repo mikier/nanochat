@@ -236,6 +236,14 @@ def main():
                 "My favorite color is",
                 "If 5*x + 3 = 13, then x is",
             ]
+            # Hebrew parallels (printed after the English ones, right-to-left).
+            heb_prompts = [
+                "בירת צרפת היא",                       # The capital of France is
+                "הסמל הכימי של הזהב הוא",              # The chemical symbol of gold is
+                "ההפך מחם הוא",                         # The opposite of hot is
+                "הצבע האהוב עלי הוא",                   # My favorite color is
+                "כוכבי הלכת של מערכת השמש הם:",        # The planets of the solar system are:
+            ]
             engine = Engine(model, tokenizer)
             print0("\nConditioned samples:")
             for prompt in prompts:
@@ -244,6 +252,16 @@ def main():
                 sample_str = tokenizer.decode(sample[0])
                 print0("-" * 80)
                 print0(sample_str)
+                samples.append(sample_str)
+
+            print0("\nHebrew conditioned samples (RTL):")
+            for prompt in heb_prompts:
+                tokens = tokenizer(prompt, prepend="<|bos|>")
+                sample, _ = engine.generate_batch(tokens, num_samples=1, max_tokens=16, temperature=0)
+                sample_str = tokenizer.decode(sample[0])
+                print0("-" * 80)
+                # Wrap in RLE..PDF and right-align so BiDi terminals render RTL.
+                print0("\u202B" + sample_str.rjust(80) + "\u202C")
                 samples.append(sample_str)
 
             print0("\nUnconditioned samples:")
