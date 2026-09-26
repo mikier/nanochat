@@ -4,7 +4,8 @@
 #
 # Trains a nanochat base model on a 50/50 interleaved mix of:
 #   - ClimbMix English parquets (karpathy/climbmix-400b-shuffle)
-#   - HeDC4 Hebrew parquets    (HeNLP/HeDC4)
+#   - Hebrew parquets built by runs/heb_download.sh from
+#     FineWeb-2 heb_Hebr (HuggingFaceFW/fineweb-2) + Hebrew Wikipedia (wikimedia/wikipedia 20231101.he)
 # distributed across 4 GPUs via torchrun.
 #
 # Launch:
@@ -26,7 +27,7 @@ mkdir -p $NANOCHAT_BASE_DIR
 NPROC=${NPROC:-4}
 
 # Opt in to the 50/50 English/Hebrew mix. This is read by
-# nanochat/dataset.py::list_parquet_files and interleaves HeDC4 shards into
+# nanochat/dataset.py::list_parquet_files and interleaves Hebrew shards into
 # the listing, so the tokenizer trainer *and* the pretraining dataloader
 # both see the mixed corpus.
 export NANOCHAT_MIX_HEB=1
@@ -50,9 +51,11 @@ fi
 python -m nanochat.report reset
 
 # -----------------------------------------------------------------------------
-# Data: grab all 10 Hebrew shards + a matching number of English shards.
-python -m nanochat.heb_dataset -n 10
-python -m nanochat.dataset -n 10
+# Data: all Hebrew FineWeb-2 + Wikipedia shards, plus a matching number of English
+# shards (the mix interleaves one EN shard per HE shard; once EN runs out it's HE-only).
+bash runs/heb_download.sh
+HE_TRAIN_SHARDS=$(( $(ls $NANOCHAT_BASE_DIR/base_data_hedc4/shard_*.parquet | wc -l) - 1 ))
+python -m nanochat.dataset -n $HE_TRAIN_SHARDS -w 16
 
 # -----------------------------------------------------------------------------
 # Tokenizer: train on a slice of the interleaved EN/HE corpus.
@@ -66,7 +69,7 @@ torchrun --standalone --nproc_per_node=$NPROC -m scripts.base_train -- \
     --depth=12 \
     --device-batch-size=16 \
     --target-param-data-ratio=8 \
-    --fp8
+    --fp8 \
     --run=$WANDB_RUN
 
 torchrun --standalone --nproc_per_node=$NPROC -m scripts.base_eval -- \

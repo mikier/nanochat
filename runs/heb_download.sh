@@ -79,6 +79,8 @@ def load_text(paths):
 
 def write_shard(texts, index):
     path = os.path.join(out, f"shard_{index:05d}.parquet")
+    # A slice keeps the parent's 64-bit offsets; copy it so it fits in a 32-bit string array
+    texts = texts.take(pa.array(np.arange(len(texts))))
     pq.write_table(
         pa.table({"text": texts.cast(pa.string())}), path,
         row_group_size=row_group_size, use_dictionary=False,
