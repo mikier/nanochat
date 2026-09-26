@@ -12,9 +12,8 @@
 # row groups of 1024 docs, globally shuffled, named shard_XXXXX.parquet. The last shard
 # is the FineWeb-2 test split, so nanochat's "last file = val" convention holds.
 #
-# Shards are sized in tokens, not chars: NANOCHAT_MIX_HEB=1 interleaves EN/HE one shard
-# at a time, so each HE shard should match a ClimbMix shard (~52M tokens). Hebrew
-# averages ~2.61 chars/token vs ~4.85 for ClimbMix, hence ~136M chars per shard.
+# Shard size doesn't affect the EN/HE ratio: the pretraining dataloader balances the two
+# languages by token count. ~136M chars keeps shards roughly the size of ClimbMix ones.
 #
 # Usage:
 #   bash runs/heb_download.sh

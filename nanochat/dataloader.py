@@ -17,25 +17,28 @@ https://github.com/karpathy/nanochat/blob/3c3a3d7/nanochat/dataloader.py#L78-L11
 """
 
 import torch
+import os
 import pyarrow.parquet as pq
 
 from nanochat.common import get_dist_info
 from nanochat.dataset import list_parquet_files
 
-def _document_batches(split, resume_state_dict, tokenizer_batch_size):
+def _document_batches(split, resume_state_dict, tokenizer_batch_size, parquet_paths=None):
     """
     Infinite iterator over document batches (list of text strings) from parquet files.
 
     Handles DDP sharding and approximate resume. Each yield is (text_batch, (pq_idx, rg_idx, epoch))
     where text_batch is a list of document strings, indices track position for resumption,
     and epoch counts how many times we've cycled through the dataset (starts at 1).
+    parquet_paths, if given, is the already-split list of files for this split.
     """
     ddp, ddp_rank, ddp_local_rank, ddp_world_size = get_dist_info()
 
-    warn_on_legacy = ddp_rank == 0 and split == "train" # rank 0 on train split will warn on legacy
-    parquet_paths = list_parquet_files(warn_on_legacy=warn_on_legacy)
-    assert len(parquet_paths) != 0, "No dataset parquet files found, did you run dataset.py?"
-    parquet_paths = parquet_paths[:-1] if split == "train" else parquet_paths[-1:]
+    if parquet_paths is None:
+        warn_on_legacy = ddp_rank == 0 and split == "train" # rank 0 on train split will warn on legacy
+        parquet_paths = list_parquet_files(warn_on_legacy=warn_on_legacy)
+        assert len(parquet_paths) != 0, "No dataset parquet files found, did you run dataset.py?"
+        parquet_paths = parquet_paths[:-1] if split == "train" else parquet_paths[-1:]
 
     resume_pq_idx = resume_state_dict["pq_idx"] if resume_state_dict is not None else 0
     resume_rg_idx = resume_state_dict["rg_idx"] if resume_state_dict is not None else None
@@ -72,6 +75,26 @@ def _document_batches(split, resume_state_dict, tokenizer_batch_size):
         epoch += 1
 
 
+def _language_streams(split, resume_state_dict, tokenizer_batch_size):
+    """
+    Document batch iterators keyed by name. With NANOCHAT_MIX_HEB=1 and both English and
+    Hebrew shards on disk, each language is its own stream so the loader can mix them 50/50
+    by tokens; a stream that runs out simply starts its next epoch.
+    """
+    if os.environ.get("NANOCHAT_MIX_HEB", "0") == "1":
+        from nanochat import dataset, heb_dataset
+        en_paths = heb_dataset.list_parquet_files(dataset.DATA_DIR)
+        he_paths = heb_dataset.list_parquet_files()
+        if en_paths and he_paths:
+            pick = (lambda p: p[:-1]) if split == "train" else (lambda p: p[-1:])
+            resume = resume_state_dict or {}
+            return {
+                "en": _document_batches(split, resume.get("en"), tokenizer_batch_size, pick(en_paths)),
+                "he": _document_batches(split, resume.get("he"), tokenizer_batch_size, pick(he_paths)),
+            }
+    return {"all": _document_batches(split, resume_state_dict, tokenizer_batch_size)}
+
+
 def tokenizing_distributed_data_loader_with_state_bos_bestfit(
     tokenizer, B, T, split,
     tokenizer_threads=4, tokenizer_batch_size=128,
@@ -97,17 +120,22 @@ def tokenizing_distributed_data_loader_with_state_bos_bestfit(
     assert split in ["train", "val"], "split must be 'train' or 'val'"
 
     row_capacity = T + 1
-    batches = _document_batches(split, resume_state_dict, tokenizer_batch_size)
+    streams = _language_streams(split, resume_state_dict, tokenizer_batch_size)
+    stream_tokens = {name: 0 for name in streams}
+    stream_states = {}
     bos_token = tokenizer.get_bos_token_id()
     doc_buffer = []
     pq_idx, rg_idx, epoch = 0, 0, 1
 
     def refill_buffer():
         nonlocal pq_idx, rg_idx, epoch
-        doc_batch, (pq_idx, rg_idx, epoch) = next(batches)
+        name = min(stream_tokens, key=stream_tokens.get)  # keep languages balanced by token count
+        doc_batch, (pq_idx, rg_idx, epoch) = next(streams[name])
+        stream_states[name] = {"pq_idx": pq_idx, "rg_idx": rg_idx, "epoch": epoch}
         token_lists = tokenizer.encode(doc_batch, prepend=bos_token, num_threads=tokenizer_threads)
         for tokens in token_lists:
             doc_buffer.append(tokens)
+            stream_tokens[name] += len(tokens)
 
     # Pre-allocate buffers once: layout is [inputs (B*T) | targets (B*T)]
     # This gives us contiguous views and a single HtoD transfer
@@ -156,6 +184,8 @@ def tokenizing_distributed_data_loader_with_state_bos_bestfit(
         cpu_targets.copy_(row_buffer[:, 1:])
 
         state_dict = {"pq_idx": pq_idx, "rg_idx": rg_idx, "epoch": epoch}
+        if len(streams) > 1:
+            state_dict.update(stream_states)
 
         # Single HtoD copy into persistent GPU buffer and yield
         gpu_buffer.copy_(cpu_buffer, non_blocking=use_cuda)

@@ -83,6 +83,8 @@ def list_parquet_files(data_dir=None, warn_on_legacy=False):
     # with the Hebrew parquet list, so the dataloader sees one EN shard,
     # then one HE shard, and so on. The last path in the returned list is
     # still treated as the val shard by downstream iterators.
+    # The tokenizer trainer reads this list; the pretraining dataloader instead
+    # balances EN/HE by token count (see dataloader._language_streams).
     if os.environ.get("NANOCHAT_MIX_HEB", "0") == "1":
         from nanochat import heb_dataset
         he_paths = heb_dataset.list_parquet_files()

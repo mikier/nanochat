@@ -52,7 +52,7 @@ python -m nanochat.report reset
 
 # -----------------------------------------------------------------------------
 # Data: all Hebrew FineWeb-2 + Wikipedia shards, plus a matching number of English
-# shards (the mix interleaves one EN shard per HE shard; once EN runs out it's HE-only).
+# shards. The dataloader mixes EN/HE 50/50 by tokens; a language that runs out repeats.
 bash runs/heb_download.sh
 HE_TRAIN_SHARDS=$(( $(ls $NANOCHAT_BASE_DIR/base_data_hedc4/shard_*.parquet | wc -l) - 1 ))
 python -m nanochat.dataset -n $HE_TRAIN_SHARDS -w 16
